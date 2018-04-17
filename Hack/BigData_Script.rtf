@@ -1,0 +1,251 @@
+{\rtf1\ansi\ansicpg1252\cocoartf1561\cocoasubrtf200
+{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww18300\viewh12940\viewkind0
+\pard\tx566\tx1133\tx1700\tx2267\tx2834\tx3401\tx3968\tx4535\tx5102\tx5669\tx6236\tx6803\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 \
+\
+## Set python -Spark Environment\
+import os\
+import sys\
+os.environ["SPARK_HOME"] = "/usr/hdp/current/spark2-client"\
+os.environ["PYLIB"] = os.environ["SPARK_HOME"] + "/python/lib"\
+sys.path.insert(0, os.environ["PYLIB"] + "/py4j-0.10.4-src.zip")\
+sys.path.insert(0, os.environ["PYLIB"] + "/pyspark.zip")\
+\
+\
+\
+## Create Spark Context Spark Session\
+from pyspark.sql import SparkSession\
+from pyspark import SparkContext\
+sc = SparkContext()\
+spark = SparkSession(sc)\
+\
+\
+from pyspark.sql import SQLContext\
+sqlContext = SQLContext(sc)\
+\
+\
+from pyspark.ml.feature import VectorIndexer\
+from pyspark.ml.feature import OneHotEncoder\
+from pyspark.ml.feature import StringIndexer\
+from pyspark.ml.feature import VectorAssembler\
+\
+\
+from pyspark.sql.types import *\
+from pyspark.sql.functions import *\
+\
+\
+## Importing Required Libraries\
+import numpy as np\
+import StringIO\
+import pandas as pd\
+import warnings\
+\
+\
+##Define the Schema\
+financialDistressSchema = StructType([\
+         StructField("Target", StringType(), True),\
+         StructField("Utilization", DoubleType(), True),\
+         StructField("age", IntegerType(), True),\
+         StructField("FD_ind1", IntegerType(), True),\
+         StructField("Debt_Ratio", DoubleType(), True),\
+         StructField("Monthly_Income", IntegerType(), True),\
+         StructField("FD_ind2", IntegerType(), True),\
+         StructField("FD_ind3", IntegerType(), True),        \
+         StructField("FD_ind4", IntegerType(), True),\
+         StructField("FD_ind5", IntegerType(), True),\
+         StructField("NumberOfDependents", IntegerType(), True)])\
+\
+\
+\
+\
+\
+### 1. Read the data and create dataframe and verify data.\
+\
+##Read the dataset into spark environment\
+financialDistressData = spark.read.format("csv")\\\
+.option("header", "false")\\\
+.option("inferschema",True)\\\
+.option("nullvalue", "NA")\\\
+.load("/user/datasets/B34PHD/Batch34_phdData.csv", schema = financialDistressSchema)\
+\
+\
+\
+financialDistressData\
+financialDistressData.show(100)\
+\
+\
+## Describes statistics\
+financialDistressData.describe().show()\
+\
+\
+### 2. Display the count of rows and columns\
+\
+financialDistressData.dtypes\
+#financialDistressData.count()\
+print("Total records count is \{\}".format(financialDistressData.count())) ##Total records\
+print("Total Coloumns count is \{\}".format(len(financialDistressData.columns)))\
+print("\\n\\n Coloumns \{\}".format((financialDistressData.columns)))\
+\
+\
+zero = financialDistressData.where(financialDistressData.Target == "0")\
+one = financialDistressData.where(financialDistressData.Target == "1")\
+print(zero.count())\
+print(one.count())\
+#percentageImbalance = (DoubleType(one.count())) / (DoubleType(zero.count())))\
+#print("Percentage of distribution of target variable is \{\}" .format(percentageImbalance))\
+\
+\
+## 4. After you create the dataframe in the first step , Target attribute will be in the first column of the dataframe , make it as the last column of the dataframe\
+\
+print(financialDistressData.columns)\
+#listCols\
+financialDistressData = financialDistressData.select(['Utilization', 'age','FD_ind1','Debt_Ratio', 'Monthly_Income', 'FD_ind2', 'FD_ind3', 'FD_ind4', 'FD_ind5', 'NumberOfDependents', 'Target'])\
+#print(financialDistressData.columns)\
+print(financialDistressData.columns)\
+\
+\
+\
+## 5.  Find out which feature has how many numbers of missing values.\
+\
+from pyspark.sql.functions import isnan, when, count, col, sum, avg\
+\
+financialDistressData.select([count(when(isnan(c) | col(c).isNull(), c)).alias(c) for c in financialDistressData.columns]).show()\
+\
+\
+\
+## 6. Fill the missing values for features as given below (Do not delete the rows with Null/Missing values):\
+ ## Monthly_Income, NumberOfDependents has missing values\
+\
+def fill_with_mean(df, exclude=set()): \
+    stats = df.agg(*(\
+        avg(c).alias(c) for c in df.columns if c in exclude\
+    ))\
+    return df.na.fill(stats.first().asDict())\
+\
+financialDistressData = fill_with_mean(financialDistressData, ["Monthly_Income"])\
+\
+financialDistressData =  financialDistressData.na.fill(0)\
+\
+\
+\
+\
+\
+\
+######### Logistic Regression Model building.\
+\
+train,test=financialDistressData.randomSplit([0.7, 0.3])\
+\
+labelIndexer = StringIndexer(inputCol="Target", outputCol="indexedLabel").fit(train)\
+labelIndexer\
+\
+from pyspark.ml.feature import IndexToString\
+labelConverter = IndexToString(inputCol="prediction",outputCol="predictedLabel",labels=labelIndexer.labels)\
+labelConverter\
+\
+\
+from pyspark.ml.classification import LogisticRegression\
+from pyspark.ml import Pipeline\
+\
+lr = LogisticRegression(maxIter=30,labelCol="indexedLabel", featuresCol="features")\
+\
+stages=[labelIndexer,assembler]\
+stages.append(lr)\
+stages.append(labelConverter)\
+\
+pipeline = Pipeline(stages=stages)\
+\
+model = pipeline.fit(train)\
+predictions = model.transform(train)\
+\
+\
+predictions.select("indexedLabel","predictedLabel", "prediction").show(100,False)\
+\
+\
+true_positive = predictions[(predictions.indexedLabel == 1) & (predictions.prediction == 1.0)].count()\
+true_negative = predictions[(predictions.indexedLabel == 0) & (predictions.prediction == 0.0)].count()\
+false_positive = predictions[(predictions.indexedLabel == 0) & (predictions.prediction == 1.0)].count()\
+false_negative = predictions[(predictions.indexedLabel == 1) & (predictions.prediction == 0.0)].count()\
+print "True Positives:", true_positive\
+print "True Negatives:", true_negative\
+print "False Positives:", false_positive\
+print "False Negatives:", false_negative\
+print "Total Train", predictions.count()\
+\
+\
+\
+def recallValue(tp, fn):\
+    rec = float(tp)/float(tp+fn)\
+    return rec\
+\
+\
+pred_test=model.transform(test)\
+true_positive_test = pred_test[(pred_test.indexedLabel == 1) & (pred_test.prediction == 1.0)].count()\
+true_negative_test = pred_test[(pred_test.indexedLabel == 0) & (pred_test.prediction == 0.0)].count()\
+false_positive_test = pred_test[(pred_test.indexedLabel == 0) & (pred_test.prediction == 1.0)].count()\
+false_negative_test = pred_test[(pred_test.indexedLabel == 1) & (pred_test.prediction == 0.0)].count()\
+print "True Positives _test:", true_positive_test\
+print "True Negatives _test:", true_negative_test\
+print "False Positives _test:", false_positive_test\
+print "False Negatives_test:", false_negative_test\
+print "Total _test", pred_test.count()\
+\
+recall_test = recallValue(true_positive_test, false_negative_test)\
+print("test recall value is \{\}".format(recall_test))\
+\
+\
+\
+\
+### Random Forest\
+\
+\
+from pyspark.ml.classification import RandomForestClassifier\
+rf = RandomForestClassifier(labelCol="indexedLabel", featuresCol="features",numTrees=100,maxDepth=12,maxBins=8)\
+\
+stages1=[labelIndexer,assembler]\
+stages1.append(rf)\
+stages1.append(labelConverter)\
+\
+pipeline_rf = Pipeline(stages=stages1)\
+\
+model_rf = pipeline.fit(train)\
+predictions_rf = model.transform(train)\
+\
+\
+\
+true_positive_rf = predictions_rf[(predictions_rf.indexedLabel == 1) & (predictions_rf.prediction == 1.0)].count()\
+true_negative_rf = predictions_rf[(predictions_rf.indexedLabel == 0) & (predictions_rf.prediction == 0.0)].count()\
+false_positive_rf = predictions_rf[(predictions_rf.indexedLabel == 0) & (predictions_rf.prediction == 1.0)].count()\
+false_negative_rf = predictions_rf[(predictions_rf.indexedLabel == 1) & (predictions_rf.prediction == 0.0)].count()\
+print "True Positives:", true_positive_rf\
+print "True Negatives:", true_negative_rf\
+print "False Positives:", false_positive_rf\
+print "False Negatives:", false_negative_rf\
+print "Total RF", predictions_rf.count()\
+\
+\
+\
+pred_rf_test=model.transform(test)\
+true_positive_rft = pred_rf_test[(pred_rf_test.indexedLabel == 1) & (pred_rf_test.prediction == 1.0)].count()\
+true_negative_rft = pred_rf_test[(pred_rf_test.indexedLabel == 0) & (pred_rf_test.prediction == 0.0)].count()\
+false_positive_rft = pred_rf_test[(pred_rf_test.indexedLabel == 0) & (pred_rf_test.prediction == 1.0)].count()\
+false_negative_rft = pred_rf_test[(pred_rf_test.indexedLabel == 1) & (pred_rf_test.prediction == 0.0)].count()\
+print "True Positives:", true_positive_rft\
+print "True Negatives:", true_negative_rft\
+print "False Positives:", false_positive_rft\
+print "False Negatives:", false_negative_rft\
+print "Total", pred_rf_test.count()\
+\
+\
+print("Recall Test RF is \{\}".format(recallValue(true_positive_rft, false_negative_rft)))\
+\
+\
+\
+\
+\
+\
+\
+}
